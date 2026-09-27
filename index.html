@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arcade Driving Game</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    background-color: #121212;
+    color: #ffffff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  #game-container {
+    position: relative;
+    border-radius: 12px;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+    border: 2px solid #333;
+  }
+  canvas {
+    background: #27ae60; /* Open grassy terrain */
+    display: block;
+  }
+  #hud {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(5px);
+    padding: 15px 25px;
+    border-radius: 8px;
+    font-size: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .hud-item {
+    display: flex;
+    justify-content: space-between;
+    min-width: 160px;
+    margin-bottom: 5px;
+  }
+  .hud-item:last-child {
+    margin-bottom: 0;
+  }
+  .hud-val {
+    font-weight: bold;
+    color: #2ecc71;
+  }
+  #instructions {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(5px);
+    padding: 10px 24px;
+    border-radius: 20px;
+    font-size: 14px;
+    color: #ddd;
+    pointer-events: none;
+    white-space: nowrap;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+</style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="gameCanvas" width="900" height="600"></canvas>
+  
+  <div id="hud">
+    <div class="hud-item"><span>Speed:</span> <span id="speedVal" class="hud-val">0 MPH</span></div>
+    <div class="hud-item"><span>Score:</span> <span id="scoreVal" class="hud-val">0</span></div>
+    <div class="hud-item"><span>Status:</span> <span id="driftVal" class="hud-val">CRUISING</span></div>
+  </div>
+
+  <div id="instructions">
+    🚗 <b>WASD / Arrow Keys</b> to Drive & Steer | <b>SPACEBAR</b> to Drift & Handbrake
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const speedVal = document.getElementById('speedVal');
+const scoreVal = document.getElementById('scoreVal');
+const driftVal = document.getElementById('driftVal');
+
+// Controls listener
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// Player Car Setup
+const car = {
+  x: 0,
+  y: 0,
+  width: 42,
+  height: 22,
+  angle: 0,
+  speed: 0,
+  maxSpeed: 11,
+  reverseMaxSpeed: -4,
+  accel: 0.22,
+  brake: 0.35,
+  friction: 0.97,
+  steerSensitivity: 0.045,
+  driftFactor: 0.94,
+  isDrifting: false
+};
+
+// Generate Collectible Coins across the world map
+let score = 0;
+const coins = [];
+for (let i = 0; i < 40; i++) {
+  coins.push({
+    x: (Math.random() - 0.5) * 4000,
+    y: (Math.random() - 0.5) * 4000,
+    radius: 10,
+    collected: false
+  });
+}
+
+// Particle queues for skids
+const skids = [];
+
+function update() {
+  // Steer only when moving
+  const speedRatio = Math.abs(car.speed) / car.maxSpeed;
+  let isTurning = false;
+
+  if (keys['ArrowLeft'] || keys['KeyA']) {
+    car.angle -= car.steerSensitivity * (speedRatio + 0.1);
+    isTurning = true;
+  }
+  if (keys['ArrowRight'] || keys['KeyD']) {
+    car.angle += car.steerSensitivity * (speedRatio + 0.1);
+    isTurning = true;
+  }
+
+  // Acceleration / Braking
+  if (keys['ArrowUp'] || keys['KeyW']) {
+    car.speed += car.accel;
+  } else if (keys['ArrowDown'] || keys['KeyS']) {
+    car.speed -= car.brake;
+  } else {
+    car.speed *= car.friction;
+  }
+
+  // Handbrake / Drift mode
+  car.isDrifting = keys['Space'] && Math.abs(car.speed) > 3.5 && isTurning;
+  
+  if (car.isDrifting) {
+    car.speed *= car.driftFactor;
+    // Add tire skid marks behind the rear wheels
+    const rearX = car.x - Math.cos(car.angle) * 15;
+    const rearY = car.y - Math.sin(car.angle) * 15;
+    skids.push({ x: rearX, y: rearY, opacity: 0.6, life: 120 });
+  }
+
+  // Speed Boundaries
+  if (car.speed > car.maxSpeed) car.speed = car.maxSpeed;
+  if (car.speed < car.reverseMaxSpeed) car.speed = car.reverseMaxSpeed;
+
+  // Move car based on velocity & facing angle
+  car.x += Math.cos(car.angle) * car.speed;
+  car.y += Math.sin(car.angle) * car.speed;
+
+  // Collectible Pickups Collision Check
+  coins.forEach(coin => {
+    if (!coin.collected) {
+      const dist = Math.hypot(car.x - coin.x, car.y - coin.y);
+      if (dist < coin.radius + 20) {
+        coin.collected = true;
+        score += 100;
+      }
+    }
+  });
+
+  // Update HUD
+  const displaySpeed = Math.round(Math.abs(car.speed) * 8);
+  speedVal.innerText = `${displaySpeed} MPH`;
+  scoreVal.innerText = score;
+  
+  if (car.isDrifting) {
+    driftVal.innerText = '🔥 DRIFTING!';
+    driftVal.style.color = '#e74c3c';
+  } else {
+    driftVal.innerText = 'CRUISING';
+    driftVal.style.color = '#2ecc71';
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.save();
+  // Center camera position on player car
+  ctx.translate(canvas.width / 2 - car.x, canvas.height / 2 - car.y);
+
+  // Draw Grid / Road Terrain
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.lineWidth = 2;
+  const gridSize = 120;
+  const startX = Math.floor((car.x - canvas.width) / gridSize) * gridSize;
+  const endX = Math.floor((car.x + canvas.width) / gridSize) * gridSize;
+  const startY = Math.floor((car.y - canvas.height) / gridSize) * gridSize;
+  const endY = Math.floor((car.y + canvas.height) / gridSize) * gridSize;
+
+  for (let x = startX; x <= endX; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, startY);
+    ctx.lineTo(x, endY);
+    ctx.stroke();
+  }
+  for (let y = startY; y <= endY; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(startX, y);
+    ctx.lineTo(endX, y);
+    ctx.stroke();
+  }
+
+  // Draw Tire Skid Marks
+  for (let i = skids.length - 1; i >= 0; i--) {
+    const s = skids[i];
+    ctx.fillStyle = `rgba(20, 20, 20, ${s.opacity})`;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    s.opacity -= 0.005;
+    s.life -= 1;
+    if (s.life <= 0 || s.opacity <= 0) skids.splice(i, 1);
+  }
+
+  // Draw Golden Coins
+  coins.forEach(coin => {
+    if (!coin.collected) {
+      ctx.fillStyle = '#f1c40f';
+      ctx.beginPath();
+      ctx.arc(coin.x, coin.y, coin.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#f39c12';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+  });
+
+  // Draw Car Model
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(car.angle);
+
+  // Car Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(-car.width / 2 + 3, -car.height / 2 + 3, car.width, car.height);
+
+  // Main Car Body (Red Sports Car)
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillRect(-car.width / 2, -car.height / 2, car.width, car.height);
+
+  // Roof / Windshield
+  ctx.fillStyle = '#2c3e50';
+  ctx.fillRect(-car.width / 6, -car.height / 2 + 3, car.width / 3, car.height - 6);
+
+  // Headlights
+  ctx.fillStyle = '#f39c12';
+  ctx.fillRect(car.width / 2 - 3, -car.height / 2 + 2, 4, 4);
+  ctx.fillRect(car.width / 2 - 3, car.height / 2 - 6, 4, 4);
+
+  // Wheels
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-car.width / 2 + 5, -car.height / 2 - 2, 9, 4);
+  ctx.fillRect(car.width / 2 - 14, -car.height / 2 - 2, 9, 4);
+  ctx.fillRect(-car.width / 2 + 5, car.height / 2 - 2, 9, 4);
+  ctx.fillRect(car.width / 2 - 14, car.height / 2 - 2, 9, 4);
+
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// Start Game
+gameLoop();
+</script>
+
+</body>
+</html>
